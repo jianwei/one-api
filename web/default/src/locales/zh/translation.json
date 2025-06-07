@@ -327,12 +327,15 @@
       "prompt_tokens": "提示词消耗",
       "completion_tokens": "补全消耗",
       "quota": "额度",
-      "detail": "详情"
+      "detail": "详情",
+      "all_detail": "全部详情",
+      "all_detail_bottom": "查看"
     },
     "buttons": {
       "query": "操作",
       "submit": "查询",
-      "refresh": "刷新"
+      "refresh": "刷新",
+      "detail": "查看模型详情"
     }
   },
   "user": {

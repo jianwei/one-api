@@ -9,6 +9,12 @@ import {
   Select,
   Table,
   Popup,
+  ModalHeader,
+  ModalDescription,
+  ModalContent,
+  ModalActions,
+  Image,
+  Modal,
 } from 'semantic-ui-react';
 import {
   API,
@@ -160,7 +166,11 @@ const LogsTable = () => {
   const [stat, setStat] = useState({
     quota: 0,
     token: 0,
+    modelStatus:false,
   });
+
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [detailLog, setDetailLog] = useState(null);
 
   const LOG_OPTIONS = [
     { key: '0', text: t('log.type.all'), value: 0 },
@@ -307,6 +317,16 @@ const LogsTable = () => {
     setLogs(sortedLogs);
     setLoading(false);
   };
+
+  const ShowDetail = (log) => {
+    if (log) {
+      setDetailLog(log);
+      setShowDetailModal(true);
+    } else {
+      setShowDetailModal(false);
+      setDetailLog(null);
+    }
+  }
 
   return (
     <>
@@ -501,6 +521,8 @@ const LogsTable = () => {
               </>
             )}
             <Table.HeaderCell>{t('log.table.detail')}</Table.HeaderCell>
+            <Table.HeaderCell style={{ cursor: 'pointer' }} width={1}>{t('log.table.all_detail')}</Table.HeaderCell>
+
           </Table.Row>
         </Table.Header>
 
@@ -570,6 +592,13 @@ const LogsTable = () => {
                   )}
 
                   <Table.Cell>{renderDetail(log)}</Table.Cell>
+                  { (log.input || log.output)?(
+                    <Table.Cell><Button style={{padding: '8px'}} size='small' content='Primary' primary onClick={() => {ShowDetail(log)}}>{t('log.table.all_detail_bottom')}</Button></Table.Cell>
+                  ):(
+                    <Table.Cell></Table.Cell>
+                  )}
+                  
+
                 </Table.Row>
               );
             })}
@@ -606,6 +635,24 @@ const LogsTable = () => {
           </Table.Row>
         </Table.Footer>
       </Table>
+      
+      <Modal
+        onClose={() => ShowDetail(false)}
+        open={showDetailModal}
+      >
+        <ModalHeader>{t('log.buttons.detail')}</ModalHeader>
+        <ModalContent>
+          {detailLog && (
+            <>
+               <Header as='h3'>prompt：</Header>
+              <div dangerouslySetInnerHTML={{ __html: detailLog.input.replace(/\n/g, '<br />') }} />
+              <Header as='h3'>output：</Header>
+              <div dangerouslySetInnerHTML={{ __html: detailLog.output.replace(/\n/g, '<br />') }} />
+            </>
+          )}
+        </ModalContent>
+      </Modal>
+
     </>
   );
 };

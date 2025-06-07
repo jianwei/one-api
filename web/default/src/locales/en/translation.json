@@ -327,12 +327,16 @@
       "prompt_tokens": "Prompt Tokens",
       "completion_tokens": "Completion Tokens",
       "quota": "Quota",
-      "detail": "Detail"
+      "detail": "Detail",
+      "all_detail": "All Detail",
+       "all_detail_bottom": "show"
     },
     "buttons": {
       "query": "Action",
       "submit": "Query",
-      "refresh": "Refresh"
+      "refresh": "Refresh",
+      "detail": "Detail"
+     
     }
   },
   "user": {
