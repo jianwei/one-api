@@ -23,6 +23,16 @@ import (
 
 // https://platform.openai.com/docs/api-reference/chat
 
+type bodyWriter struct {
+	gin.ResponseWriter
+	body *bytes.Buffer
+}
+
+func (w bodyWriter) Write(b []byte) (int, error) {
+	w.body.Write(b)
+	return w.ResponseWriter.Write(b)
+}
+
 func relayHelper(c *gin.Context, relayMode int) *model.ErrorWithStatusCode {
 	var err *model.ErrorWithStatusCode
 	switch relayMode {
@@ -51,9 +61,19 @@ func Relay(c *gin.Context) {
 	}
 	channelId := c.GetInt(ctxkey.ChannelId)
 	userId := c.GetInt(ctxkey.Id)
+	requestBody, _ := common.GetRequestBody(c)
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
+	bw := &bodyWriter{body: bytes.NewBufferString(""), ResponseWriter: c.Writer}
+	c.Writer = bw
 	bizErr := relayHelper(c, relayMode)
 	if bizErr == nil {
 		monitor.Emit(channelId, true)
+		dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
+			UserId:   userId,
+			ChannelId: channelId,
+			Input:    string(requestBody),
+			Output:   bw.body.String(),
+		})
 		return
 	}
 	lastFailedChannelId := channelId
@@ -82,6 +102,12 @@ func Relay(c *gin.Context) {
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 		bizErr = relayHelper(c, relayMode)
 		if bizErr == nil {
+			dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
+				UserId:   userId,
+				ChannelId: channelId,
+				Input:    string(requestBody),
+				Output:   bw.body.String(),
+			})
 			return
 		}
 		channelId := c.GetInt(ctxkey.ChannelId)
@@ -98,6 +124,12 @@ func Relay(c *gin.Context) {
 		bizErr.Error.Message = helper.MessageWithRequestId(bizErr.Error.Message, requestId)
 		c.JSON(bizErr.StatusCode, gin.H{
 			"error": bizErr.Error,
+		})
+		dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
+			UserId:   userId,
+			ChannelId: channelId,
+			Input:    string(requestBody),
+			Output:   bw.body.String(),
 		})
 	}
 }
