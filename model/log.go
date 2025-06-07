@@ -29,6 +29,8 @@ type Log struct {
 	ElapsedTime       int64  `json:"elapsed_time" gorm:"default:0"` // unit is ms
 	IsStream          bool   `json:"is_stream" gorm:"default:false"`
 	SystemPromptReset bool   `json:"system_prompt_reset" gorm:"default:false"`
+	Input  			  string `json:"input"`
+    Output 			  string `json:"output"`
 }
 
 const (

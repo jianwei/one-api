@@ -210,6 +210,7 @@ docker-compose ps
    cd ../..
    go mod download
    go build -ldflags "-s -w" -o one-api
+   go run -ldflags "-s -w" main.go --port 4000
    ````
 2. 运行：
    ```shell
