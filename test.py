@@ -12,6 +12,7 @@ response = client.chat.completions.create(
     messages=[
         {'role': 'user', 
         'content': "推理模型会给市场带来哪些新的机会"}
+        # 'content': "11+1=?"}
     ],
     stream=True
 )

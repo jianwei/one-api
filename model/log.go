@@ -29,8 +29,8 @@ type Log struct {
 	ElapsedTime       int64  `json:"elapsed_time" gorm:"default:0"` // unit is ms
 	IsStream          bool   `json:"is_stream" gorm:"default:false"`
 	SystemPromptReset bool   `json:"system_prompt_reset" gorm:"default:false"`
-	Input  			  string `json:"input"`
-    Output 			  string `json:"output"`
+	Input             string `json:"input"`
+	Output            string `json:"output"`
 }
 
 const (
@@ -42,15 +42,18 @@ const (
 	LogTypeTest
 )
 
-func recordLogHelper(ctx context.Context, log *Log) {
+func recordLogHelper(ctx context.Context, log *Log) int {
 	requestId := helper.GetRequestID(ctx)
 	log.RequestId = requestId
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		logger.Error(ctx, "failed to record log: "+err.Error())
-		return
+		return 0
 	}
+
 	logger.Infof(ctx, "record log: %+v", log)
+	logger.Infof(ctx, "record log id: %d", log.Id)
+	return log.Id
 }
 
 func RecordLog(ctx context.Context, userId int, logType int, content string) {
@@ -79,14 +82,15 @@ func RecordTopupLog(ctx context.Context, userId int, content string, quota int) 
 	recordLogHelper(ctx, log)
 }
 
-func RecordConsumeLog(ctx context.Context, log *Log) {
+func RecordConsumeLog(ctx context.Context, log *Log) int {
 	if !config.LogConsumeEnabled {
-		return
+		return 0
 	}
 	log.Username = GetUsernameById(log.UserId)
 	log.CreatedAt = helper.GetTimestamp()
 	log.Type = LogTypeConsume
 	recordLogHelper(ctx, log)
+	return log.Id
 }
 
 func RecordTestLog(ctx context.Context, log *Log) {
@@ -250,4 +254,12 @@ func SearchLogsByDayAndModel(userId, start, end int) (LogStatistics []*LogStatis
 	`, userId, start, end).Scan(&LogStatistics).Error
 
 	return LogStatistics, err
+}
+
+// 根据 logId 更新 input 和 output 字段
+func UpdateLogInputOutput(ctx context.Context, logId int, input, output string) error {
+	return LOG_DB.Model(&Log{}).Where("id = ?", logId).Updates(map[string]interface{}{
+		"input":  input,
+		"output": output,
+	}).Error
 }

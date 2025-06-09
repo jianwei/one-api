@@ -22,14 +22,14 @@ import (
 	"github.com/songquanpeng/one-api/relay/model"
 )
 
-func RelayTextHelper(c *gin.Context) *model.ErrorWithStatusCode {
+func RelayTextHelper(c *gin.Context) (int, *model.ErrorWithStatusCode) {
 	ctx := c.Request.Context()
 	meta := meta.GetByContext(c)
 	// get & validate textRequest
 	textRequest, err := getAndValidateTextRequest(c, meta.Mode)
 	if err != nil {
 		logger.Errorf(ctx, "getAndValidateTextRequest failed: %s", err.Error())
-		return openai.ErrorWrapper(err, "invalid_text_request", http.StatusBadRequest)
+		return 0, openai.ErrorWrapper(err, "invalid_text_request", http.StatusBadRequest)
 	}
 	meta.IsStream = textRequest.Stream
 
@@ -49,30 +49,30 @@ func RelayTextHelper(c *gin.Context) *model.ErrorWithStatusCode {
 	preConsumedQuota, bizErr := preConsumeQuota(ctx, textRequest, promptTokens, ratio, meta)
 	if bizErr != nil {
 		logger.Warnf(ctx, "preConsumeQuota failed: %+v", *bizErr)
-		return bizErr
+		return 0, bizErr
 	}
 
 	adaptor := relay.GetAdaptor(meta.APIType)
 	if adaptor == nil {
-		return openai.ErrorWrapper(fmt.Errorf("invalid api type: %d", meta.APIType), "invalid_api_type", http.StatusBadRequest)
+		return 0, openai.ErrorWrapper(fmt.Errorf("invalid api type: %d", meta.APIType), "invalid_api_type", http.StatusBadRequest)
 	}
 	adaptor.Init(meta)
 
 	// get request body
 	requestBody, err := getRequestBody(c, meta, textRequest, adaptor)
 	if err != nil {
-		return openai.ErrorWrapper(err, "convert_request_failed", http.StatusInternalServerError)
+		return 0, openai.ErrorWrapper(err, "convert_request_failed", http.StatusInternalServerError)
 	}
 
 	// do request
 	resp, err := adaptor.DoRequest(c, meta, requestBody)
 	if err != nil {
 		logger.Errorf(ctx, "DoRequest failed: %s", err.Error())
-		return openai.ErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
+		return 0, openai.ErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	if isErrorHappened(meta, resp) {
 		billing.ReturnPreConsumedQuota(ctx, preConsumedQuota, meta.TokenId)
-		return RelayErrorHandler(resp)
+		return 0, RelayErrorHandler(resp)
 	}
 
 	// do response
@@ -80,11 +80,12 @@ func RelayTextHelper(c *gin.Context) *model.ErrorWithStatusCode {
 	if respErr != nil {
 		logger.Errorf(ctx, "respErr is not nil: %+v", respErr)
 		billing.ReturnPreConsumedQuota(ctx, preConsumedQuota, meta.TokenId)
-		return respErr
+		return 0, respErr
 	}
 	// post-consume quota
-	go postConsumeQuota(ctx, usage, meta, textRequest, ratio, preConsumedQuota, modelRatio, groupRatio, systemPromptReset)
-	return nil
+	// go postConsumeQuota(ctx, usage, meta, textRequest, ratio, preConsumedQuota, modelRatio, groupRatio, systemPromptReset)
+	logId := postConsumeQuota(ctx, usage, meta, textRequest, ratio, preConsumedQuota, modelRatio, groupRatio, systemPromptReset)
+	return logId, nil
 }
 
 func getRequestBody(c *gin.Context, meta *meta.Meta, textRequest *model.GeneralOpenAIRequest, adaptor adaptor.Adaptor) (io.Reader, error) {

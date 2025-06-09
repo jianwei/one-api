@@ -33,8 +33,9 @@ func (w bodyWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-func relayHelper(c *gin.Context, relayMode int) *model.ErrorWithStatusCode {
+func relayHelper(c *gin.Context, relayMode int) (int, *model.ErrorWithStatusCode) {
 	var err *model.ErrorWithStatusCode
+	var logId int = 0
 	switch relayMode {
 	case relaymode.ImagesGenerations:
 		err = controller.RelayImageHelper(c, relayMode)
@@ -47,9 +48,9 @@ func relayHelper(c *gin.Context, relayMode int) *model.ErrorWithStatusCode {
 	case relaymode.Proxy:
 		err = controller.RelayProxyHelper(c, relayMode)
 	default:
-		err = controller.RelayTextHelper(c)
+		logId, err = controller.RelayTextHelper(c)
 	}
-	return err
+	return logId, err
 }
 
 func Relay(c *gin.Context) {
@@ -65,15 +66,19 @@ func Relay(c *gin.Context) {
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 	bw := &bodyWriter{body: bytes.NewBufferString(""), ResponseWriter: c.Writer}
 	c.Writer = bw
-	bizErr := relayHelper(c, relayMode)
+	logId, bizErr := relayHelper(c, relayMode)
 	if bizErr == nil {
 		monitor.Emit(channelId, true)
-		dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
-			UserId:   userId,
-			ChannelId: channelId,
-			Input:    string(requestBody),
-			Output:   bw.body.String(),
-		})
+		if logId != 0 {
+			dbmodel.UpdateLogInputOutput(ctx, logId, string(requestBody), bw.body.String())
+		} else {
+			dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
+				UserId:    userId,
+				ChannelId: channelId,
+				Input:     string(requestBody),
+				Output:    bw.body.String(),
+			})
+		}
 		return
 	}
 	lastFailedChannelId := channelId
@@ -100,14 +105,18 @@ func Relay(c *gin.Context) {
 		middleware.SetupContextForSelectedChannel(c, channel, originalModel)
 		requestBody, err := common.GetRequestBody(c)
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
-		bizErr = relayHelper(c, relayMode)
+		logId, bizErr = relayHelper(c, relayMode)
 		if bizErr == nil {
-			dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
-				UserId:   userId,
-				ChannelId: channelId,
-				Input:    string(requestBody),
-				Output:   bw.body.String(),
-			})
+			if logId != 0 {
+				dbmodel.UpdateLogInputOutput(ctx, logId, string(requestBody), bw.body.String())
+			} else {
+				dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
+					UserId:    userId,
+					ChannelId: channelId,
+					Input:     string(requestBody),
+					Output:    bw.body.String(),
+				})
+			}
 			return
 		}
 		channelId := c.GetInt(ctxkey.ChannelId)
@@ -126,10 +135,10 @@ func Relay(c *gin.Context) {
 			"error": bizErr.Error,
 		})
 		dbmodel.RecordConsumeLog(ctx, &dbmodel.Log{
-			UserId:   userId,
+			UserId:    userId,
 			ChannelId: channelId,
-			Input:    string(requestBody),
-			Output:   bw.body.String(),
+			Input:     string(requestBody),
+			Output:    bw.body.String(),
 		})
 	}
 }
