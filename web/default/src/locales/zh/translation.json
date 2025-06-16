@@ -311,6 +311,7 @@
     },
     "table": {
       "time": "时间",
+      "id": "ID",
       "channel": "渠道",
       "type": "类型",
       "model": "模型",

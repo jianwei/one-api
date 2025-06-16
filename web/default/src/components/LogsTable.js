@@ -328,6 +328,25 @@ const LogsTable = () => {
     }
   }
 
+  const safeDecode = (str) => {
+    if (!str) return '';
+    try {
+      return JSON.stringify(JSON.parse(str)).replace(/\\n/g, '<br />');
+    } catch (e) {
+      return str;
+    }
+  };
+
+
+  const safeOutputDecode = (str) => {
+    if (!str) return '';
+    try {
+      return JSON.stringify(JSON.parse(str)).replace(/\\n/g, '<br />');
+    } catch (e) {
+      return str;
+    }
+  };
+
   return (
     <>
       <Header as='h3'>
@@ -431,12 +450,19 @@ const LogsTable = () => {
       <Table basic={'very'} compact size='small'>
         <Table.Header>
           <Table.Row>
+
+          <Table.HeaderCell
+              width={1}
+            >
+              {t('log.table.id')}
+            </Table.HeaderCell>
+
             <Table.HeaderCell
               style={{ cursor: 'pointer' }}
               onClick={() => {
                 sortLog('created_time');
               }}
-              width={3}
+              width={2}
             >
               {t('log.table.time')}
             </Table.HeaderCell>
@@ -477,7 +503,7 @@ const LogsTable = () => {
                     onClick={() => {
                       sortLog('username');
                     }}
-                    width={2}
+                    width={1}
                   >
                     {t('log.table.username')}
                   </Table.HeaderCell>
@@ -487,7 +513,7 @@ const LogsTable = () => {
                   onClick={() => {
                     sortLog('token_name');
                   }}
-                  width={2}
+                  width={1}
                 >
                   {t('log.table.token_name')}
                 </Table.HeaderCell>
@@ -520,8 +546,8 @@ const LogsTable = () => {
                 </Table.HeaderCell>
               </>
             )}
-            <Table.HeaderCell>{t('log.table.detail')}</Table.HeaderCell>
-            <Table.HeaderCell style={{ cursor: 'pointer' }} width={1}>{t('log.table.all_detail')}</Table.HeaderCell>
+            <Table.HeaderCell width={3}>{t('log.table.detail')}</Table.HeaderCell>
+            <Table.HeaderCell width={2} style={{ cursor: 'pointer' }}>{t('log.table.all_detail')}</Table.HeaderCell>
 
           </Table.Row>
         </Table.Header>
@@ -536,6 +562,9 @@ const LogsTable = () => {
               if (log.deleted) return <></>;
               return (
                 <Table.Row key={log.id}>
+                  <Table.Cell>
+                    {log.id}
+                  </Table.Cell>
                   <Table.Cell>
                     {renderTimestamp(log.created_at, log.request_id)}
                   </Table.Cell>
@@ -641,13 +670,17 @@ const LogsTable = () => {
         open={showDetailModal}
       >
         <ModalHeader>{t('log.buttons.detail')}</ModalHeader>
+
         <ModalContent>
           {detailLog && (
             <>
                <Header as='h3'>prompt：</Header>
-              <div dangerouslySetInnerHTML={{ __html: detailLog.input.replace(/\n/g, '<br />') }} />
+               <div style={{whiteSpace: 'pre-wrap',wordBreak: 'break-all',height: '300px',overflow: 'auto'}} dangerouslySetInnerHTML={{__html: safeDecode(detailLog.input)}}>
+               </div>
+             
               <Header as='h3'>output：</Header>
-              <div dangerouslySetInnerHTML={{ __html: detailLog.output.replace(/\n/g, '<br />') }} />
+               <div style={{whiteSpace: 'pre-wrap',wordBreak: 'break-all',height: '300px',overflow: 'auto'}} dangerouslySetInnerHTML={{__html: safeOutputDecode(detailLog.output)}}>
+               </div>
             </>
           )}
         </ModalContent>
