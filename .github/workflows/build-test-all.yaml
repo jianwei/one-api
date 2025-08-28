@@ -1,4 +1,5 @@
-name: build-images-test
+name: Build and Push Multi-arch Docker Images
+
 on:
   workflow_dispatch:
     inputs:
@@ -12,121 +13,220 @@ on:
           - minor
           - major
 
+env:
+  IMAGE_NAME: one-api
+  GHCR_REGISTRY: ghcr.io
+  ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+  ALIYUN_NAMESPACE: ${{ secrets.ALIYUN_NAMESPACE }}
+
 jobs:
   get_version:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.get_version.outputs.new_version }}
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # 获取完整历史记录以读取标签
-
-      - name: 获取最新版本号
-        id: get_version
-        run: |
-          # 获取最新的git标签
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "Latest tag: $LATEST_TAG"
-          
-          # 解析版本号
-          VERSION_NUM=${LATEST_TAG#v}
-          IFS='.' read -ra VERSION_PARTS <<< "$VERSION_NUM"
-          MAJOR=${VERSION_PARTS[0]}
-          MINOR=${VERSION_PARTS[1]}
-          PATCH=${VERSION_PARTS[2]:-0}
-          
-          # 根据输入类型递增版本号
-          case "${{ github.event.inputs.version_type }}" in
-            "major")
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            "minor")
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            "patch")
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-          
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "Generated new version: $NEW_VERSION"
-
-  build-all:
-    needs: [get_version]
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-latest
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-
-    steps:
-      - name: 检出代码
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 设置 QEMU 模拟器
-        uses: docker/setup-qemu-action@v2
+      - name: Get and increment version
+        id: get_version
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // 获取所有标签
+            const { data: tags } = await github.rest.repos.listTags({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            
+            // 找到最新的语义化版本标签
+            const versionRegex = /^v?(\d+)\.(\d+)\.(\d+)$/;
+            let latestVersion = { major: 0, minor: 0, patch: 0 };
+            
+            tags.forEach(tag => {
+              const match = tag.name.match(versionRegex);
+              if (match) {
+                const major = parseInt(match[1]);
+                const minor = parseInt(match[2]);
+                const patch = parseInt(match[3]);
+                
+                if (major > latestVersion.major || 
+                    (major === latestVersion.major && minor > latestVersion.minor) ||
+                    (major === latestVersion.major && minor === latestVersion.minor && patch > latestVersion.patch)) {
+                  latestVersion = { major, minor, patch };
+                }
+              }
+            });
+            
+            // 根据输入类型递增版本
+            const versionType = '${{ github.event.inputs.version_type }}';
+            let newMajor = latestVersion.major;
+            let newMinor = latestVersion.minor;
+            let newPatch = latestVersion.patch;
+            
+            switch (versionType) {
+              case 'major':
+                newMajor += 1;
+                newMinor = 0;
+                newPatch = 0;
+                break;
+              case 'minor':
+                newMinor += 1;
+                newPatch = 0;
+                break;
+              case 'patch':
+                newPatch += 1;
+                break;
+            }
+            
+            const newVersion = `v${newMajor}.${newMinor}.${newPatch}`;
+            console.log(`New version: ${newVersion}`);
+            
+            // 设置输出
+            core.setOutput('new_version', newVersion);
+            return newVersion;
 
-      - name: 设置 Docker Buildx
+  build-and-push:
+    needs: get_version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            arch_suffix: amd64
+          - platform: linux/arm64
+            arch_suffix: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver-opts: network=host
 
-      - name: 登录到 GitHub 容器注册表
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 登录到阿里云容器镜像服务
+      - name: Login to Aliyun Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          registry: ${{ env.ALIYUN_REGISTRY }}
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: 构建并推送 x86_64 镜像
-        uses: docker/build-push-action@v4
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-${{ matrix.arch_suffix }}
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}-${{ matrix.arch_suffix }}
+          tags: |
+            type=raw,value=${{ needs.get_version.outputs.new_version }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: true
           platforms: ${{ matrix.platform }}
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/one-api-${{ matrix.platform }}:${{ needs.get_version.outputs.new_version }}
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/one-api-${{ matrix.platform }}:${{ needs.get_version.outputs.new_version }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  
-
-  create_tag:
-    needs: [get_version, build-all]
+  create-multiarch-manifest:
+    needs: [get_version, build-and-push]
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Create and push multi-arch manifest for GitHub
+        run: |
+          docker manifest create \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.get_version.outputs.new_version }} \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-amd64:${{ needs.get_version.outputs.new_version }} \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-arm64:${{ needs.get_version.outputs.new_version }}
+          
+          docker manifest push \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.get_version.outputs.new_version }}
+
+          docker manifest create \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-amd64:latest \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-arm64:latest
+          
+          docker manifest push \
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Create and push multi-arch manifest for Aliyun
+        run: |
+          docker manifest create \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.get_version.outputs.new_version }} \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}-amd64:${{ needs.get_version.outputs.new_version }} \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}-arm64:${{ needs.get_version.outputs.new_version }}
+          
+          docker manifest push \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.get_version.outputs.new_version }}
+
+          docker manifest create \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}-amd64:latest \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}-arm64:latest
+          
+          docker manifest push \
+            ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
+
+  create_tag:
+    needs: [get_version, create-multiarch-manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 创建 Git 标签
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ needs.get_version.outputs.new_version }}
-          git push origin ${{ needs.get_version.outputs.new_version }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Git tag
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const newVersion = '${{ needs.get_version.outputs.new_version }}';
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/${newVersion}`,
+              sha: context.sha
+            });
+            console.log(`Created tag: ${newVersion}`);
