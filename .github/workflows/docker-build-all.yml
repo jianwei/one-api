@@ -1,4 +1,5 @@
-name: build-images-all
+name: Build and Release Multi-Arch Images
+
 on:
   workflow_dispatch:
     inputs:
@@ -11,12 +12,27 @@ on:
           - patch
           - minor
           - major
+      skip_tag:
+        description: '跳过创建 Git 标签'
+        required: false
+        default: false
+        type: boolean
+
+# 并发控制：同一时间只允许一个 workflow 运行
+concurrency:
+  group: build-and-release
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: one-api
+  GHCR_REGISTRY: ghcr.io
 
 jobs:
   get_version:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.get_version.outputs.new_version }}
+      version_type: ${{ github.event.inputs.version_type }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -26,16 +42,29 @@ jobs:
       - name: 获取最新版本号
         id: get_version
         run: |
-          # 获取最新的git标签
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # 获取最新的 git 标签，如果没有则使用 v0.0.0
+          LATEST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -n 1 || echo "v0.0.0")
           echo "Latest tag: $LATEST_TAG"
           
-          # 解析版本号
+          # 移除 'v' 前缀并解析版本号
           VERSION_NUM=${LATEST_TAG#v}
-          IFS='.' read -ra VERSION_PARTS <<< "$VERSION_NUM"
-          MAJOR=${VERSION_PARTS[0]}
-          MINOR=${VERSION_PARTS[1]}
-          PATCH=${VERSION_PARTS[2]:-0}
+          
+          # 使用更可靠的方法解析版本号
+          MAJOR=$(echo "$VERSION_NUM" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NUM" | cut -d. -f2)
+          PATCH=$(echo "$VERSION_NUM" | cut -d. -f3)
+          
+          # 设置默认值
+          MAJOR=${MAJOR:-0}
+          MINOR=${MINOR:-0}
+          PATCH=${PATCH:-0}
+          
+          # 确保都是数字
+          MAJOR=$((MAJOR))
+          MINOR=$((MINOR))
+          PATCH=$((PATCH))
+          
+          echo "Current version: $MAJOR.$MINOR.$PATCH"
           
           # 根据输入类型递增版本号
           case "${{ github.event.inputs.version_type }}" in
@@ -53,18 +82,22 @@ jobs:
               ;;
           esac
           
-          NEW_VERSION="v$MAJOR.$MINOR.$PATCH"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "Generated new version: $NEW_VERSION"
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "Generated new version: ${NEW_VERSION}"
 
-  build-amd64:
-    needs: get_version
+  build-and-push-amd64:
+    needs: [get_version]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      - name: 调试版本输出
+        run: |
+          echo "New version: ${{ needs.get_version.outputs.new_version }}"
+          echo "Version type: ${{ needs.get_version.outputs.version_type }}"
 
       - name: 设置 QEMU 模拟器
         uses: docker/setup-qemu-action@v2
@@ -77,7 +110,7 @@ jobs:
       - name: 登录到 GitHub 容器注册表
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -88,27 +121,32 @@ jobs:
           username: ${{ secrets.ALIYUN_USERNAME }}
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
-      - name: 构建并推送 x86_64 镜像
-        uses: docker/build-push-action@v4
+      - name: 构建并推送 amd64 镜像
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: true
           platforms: linux/amd64
+          push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/one-api-amd64:${{ needs.get_version.outputs.new_version }}
-            ghcr.io/${{ github.repository_owner }}/one-api-amd64:latest
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/one-api-amd64:${{ needs.get_version.outputs.new_version }}
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/one-api-amd64:latest
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-amd64:${{ needs.get_version.outputs.new_version }}
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-amd64:latest
+            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:temp-amd64-${{ needs.get_version.outputs.new_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  build-arm64:
-    needs: get_version
+  build-and-push-arm64:
+    needs: [get_version]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
+      - name: 调试版本输出
+        run: |
+          echo "New version: ${{ needs.get_version.outputs.new_version }}"
+          echo "Version type: ${{ needs.get_version.outputs.version_type }}"
 
       - name: 设置 QEMU 模拟器
         uses: docker/setup-qemu-action@v2
@@ -121,7 +159,7 @@ jobs:
       - name: 登录到 GitHub 容器注册表
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -133,32 +171,134 @@ jobs:
           password: ${{ secrets.ALIYUN_PASSWORD }}
 
       - name: 构建并推送 arm64 镜像
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: true
           platforms: linux/arm64
+          push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/one-api-arm64:${{ needs.get_version.outputs.new_version }}
-            ghcr.io/${{ github.repository_owner }}/one-api-arm64:latest
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/one-api-arm64:${{ needs.get_version.outputs.new_version }}
-            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/one-api-arm64:latest
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-arm64:${{ needs.get_version.outputs.new_version }}
+            ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-arm64:latest
+            ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:temp-arm64-${{ needs.get_version.outputs.new_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  create-multi-arch-manifest-ghcr:
+    needs: [get_version, build-and-push-amd64, build-and-push-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录到 GitHub 容器注册表
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建并推送 GitHub 多架构 manifest
+        run: |
+          # 使用 buildx imagetools 创建多架构清单
+          set -e
+          
+          VERSION_TAG="${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.get_version.outputs.new_version }}"
+          LATEST_TAG="${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest"
+          AMD64_TAG="${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-amd64:${{ needs.get_version.outputs.new_version }}"
+          ARM64_TAG="${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}-arm64:${{ needs.get_version.outputs.new_version }}"
+          
+          echo "验证单架构镜像是否存在..."
+          echo "检查: $AMD64_TAG"
+          docker buildx imagetools inspect "$AMD64_TAG" >/dev/null 2>&1 || { echo "错误: $AMD64_TAG 不存在"; exit 1; }
+          echo "检查: $ARM64_TAG"
+          docker buildx imagetools inspect "$ARM64_TAG" >/dev/null 2>&1 || { echo "错误: $ARM64_TAG 不存在"; exit 1; }
+          
+          echo "创建多架构 manifest（版本标签）: $VERSION_TAG"
+          docker buildx imagetools create -t "$VERSION_TAG" "$AMD64_TAG" "$ARM64_TAG"
+          
+          echo "创建多架构 manifest（latest 标签）: $LATEST_TAG"
+          docker buildx imagetools create -t "$LATEST_TAG" "$AMD64_TAG" "$ARM64_TAG"
+          
+          echo "验证多架构 manifest 创建成功..."
+          docker buildx imagetools inspect "$VERSION_TAG" | grep -q "linux/amd64" && echo "✓ amd64 架构已包含" || echo "✗ amd64 架构缺失"
+          docker buildx imagetools inspect "$VERSION_TAG" | grep -q "linux/arm64" && echo "✓ arm64 架构已包含" || echo "✗ arm64 架构缺失"
+
+  build-and-push-multi-arch-aliyun:
+    needs: [get_version, build-and-push-amd64, build-and-push-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录到阿里云容器镜像服务
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGISTRY }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: 创建并推送阿里云多架构 manifest
+        run: |
+          # 使用 buildx imagetools 创建多架构清单
+          # 这会创建一个统一的多架构 manifest，客户端会自动选择对应架构的镜像
+          # 在阿里云上只会显示 one-api，不带架构后缀
+          set -e
+          
+          VERSION_TAG="${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ needs.get_version.outputs.new_version }}"
+          LATEST_TAG="${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:latest"
+          AMD64_TEMP="${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:temp-amd64-${{ needs.get_version.outputs.new_version }}"
+          ARM64_TEMP="${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:temp-arm64-${{ needs.get_version.outputs.new_version }}"
+          
+          echo "验证临时镜像是否存在..."
+          echo "检查: $AMD64_TEMP"
+          docker buildx imagetools inspect "$AMD64_TEMP" >/dev/null 2>&1 || { echo "错误: $AMD64_TEMP 不存在"; exit 1; }
+          echo "检查: $ARM64_TEMP"
+          docker buildx imagetools inspect "$ARM64_TEMP" >/dev/null 2>&1 || { echo "错误: $ARM64_TEMP 不存在"; exit 1; }
+          
+          echo "创建多架构 manifest（版本标签）: $VERSION_TAG"
+          docker buildx imagetools create -t "$VERSION_TAG" "$AMD64_TEMP" "$ARM64_TEMP"
+          
+          echo "创建多架构 manifest（latest 标签）: $LATEST_TAG"
+          docker buildx imagetools create -t "$LATEST_TAG" "$AMD64_TEMP" "$ARM64_TEMP"
+          
+          echo "验证多架构 manifest 创建成功..."
+          docker buildx imagetools inspect "$VERSION_TAG" | grep -q "linux/amd64" && echo "✓ amd64 架构已包含" || echo "✗ amd64 架构缺失"
+          docker buildx imagetools inspect "$VERSION_TAG" | grep -q "linux/arm64" && echo "✓ arm64 架构已包含" || echo "✗ arm64 架构缺失"
+
+      - name: 清理临时标签（可选）
+        run: |
+          # 注意：删除临时标签是可选的
+          # 临时标签虽然存在，但不会影响用户使用 one-api 镜像
+          # 如果希望完全清理，可以取消下面的注释
+          # docker buildx imagetools rm ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:temp-amd64-${{ needs.get_version.outputs.new_version }} || true
+          # docker buildx imagetools rm ${{ secrets.ALIYUN_REGISTRY }}/${{ secrets.ALIYUN_NAMESPACE }}/${{ env.IMAGE_NAME }}:temp-arm64-${{ needs.get_version.outputs.new_version }} || true
+          echo "临时标签已保留，用于后续构建缓存。用户只需使用 one-api 镜像即可。"
 
   create_tag:
-    needs: [get_version, build-amd64, build-arm64]
+    needs: [get_version, build-and-push-amd64, build-and-push-arm64, create-multi-arch-manifest-ghcr, build-and-push-multi-arch-aliyun]
+    if: ${{ !github.event.inputs.skip_tag }}
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 创建 Git 标签
+      - name: 创建并推送 Git 标签
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ needs.get_version.outputs.new_version }}
-          git push origin ${{ needs.get_version.outputs.new_version }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -e
+          TAG_NAME="${{ needs.get_version.outputs.new_version }}"
+          
+          # 检查标签是否已存在
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "警告: 标签 $TAG_NAME 已存在，跳过创建"
+            exit 0
+          fi
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+          echo "成功创建并推送标签: $TAG_NAME"
